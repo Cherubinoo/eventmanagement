@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PGPASSWORD='Iamthatiam@1234' \"/c/Program Files/PostgreSQL/18/bin/psql.exe\" -U postgres -h localhost -c \"\\\\l\")"
+    ]
+  }
+}
