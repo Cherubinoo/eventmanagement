@@ -4,6 +4,7 @@ import Login from './pages/Login'
 import Signup from './pages/Signup'
 import AdminDashboard from './pages/AdminDashboard'
 import OrganizerDashboard from './pages/OrganizerDashboard'
+import ChangePassword from './pages/ChangePassword'
 import Events from './pages/Events'
 import ProtectedRoute from './routes/ProtectedRoute'
 import useTheme from './useTheme'
@@ -18,6 +19,14 @@ export default function App() {
           <Route path="/" element={<Home theme={theme} toggleTheme={toggleTheme} />} />
           <Route path="/login" element={<Login theme={theme} toggleTheme={toggleTheme} />} />
           <Route path="/signup" element={<Signup theme={theme} toggleTheme={toggleTheme} />} />
+          <Route
+            path="/change-password"
+            element={
+              <ProtectedRoute>
+                <ChangePassword theme={theme} toggleTheme={toggleTheme} />
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="/admin/dashboard"
             element={

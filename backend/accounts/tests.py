@@ -11,10 +11,16 @@ LOGIN_URL = '/api/auth/login/'
 REFRESH_URL = '/api/auth/refresh/'
 ME_URL = '/api/auth/me/'
 ORGANIZERS_URL = '/api/admin/organizers/'
+CHANGE_PASSWORD_URL = '/api/auth/change-password/'
+USERS_URL = '/api/admin/users/'
 
 
 def organizer_detail_url(pk):
     return f'/api/admin/organizers/{pk}/'
+
+
+def user_detail_url(pk):
+    return f'/api/admin/users/{pk}/'
 
 
 class RegistrationTests(APITestCase):
@@ -131,15 +137,67 @@ class OrganizerPermissionTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         created = User.objects.get(email='neworg@example.com')
         self.assertEqual(created.role, Role.ORGANIZER)
-        self.assertIn('generated_password', response.data)
+        self.assertTrue(created.must_change_password)
+        self.assertTrue(created.has_usable_password())
+        temporary_password = response.data['temporary_password']
 
-        # the new organizer can immediately log in with the generated password
-        login = self.client.post(LOGIN_URL, {
-            'email': 'neworg@example.com',
-            'password': response.data['generated_password'],
-        })
+        # the organizer can log in right away with the temporary password
+        login = self.client.post(LOGIN_URL, {'email': 'neworg@example.com', 'password': temporary_password})
         self.assertEqual(login.status_code, status.HTTP_200_OK)
-        self.assertEqual(login.data['user']['role'], Role.ORGANIZER)
+        self.assertTrue(login.data['user']['must_change_password'])
+
+    def test_organizer_sets_new_password_after_first_login(self):
+        self.authenticate_as('admin@example.com', 'AdminPass123!')
+        create_response = self.client.post(ORGANIZERS_URL, {
+            'name': 'Invited Organizer',
+            'email': 'invited@example.com',
+            'phone': '222',
+        })
+        temporary_password = create_response.data['temporary_password']
+        self.client.credentials()  # drop the admin's auth header
+
+        login = self.client.post(LOGIN_URL, {'email': 'invited@example.com', 'password': temporary_password})
+        self.assertTrue(login.data['user']['must_change_password'])
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login.data["access"]}')
+
+        change_response = self.client.post(CHANGE_PASSWORD_URL, {
+            'new_password': 'BrandNewPass123!',
+            'new_password_confirm': 'BrandNewPass123!',
+        })
+        self.assertEqual(change_response.status_code, status.HTTP_200_OK)
+        self.assertFalse(change_response.data['must_change_password'])
+        self.client.credentials()
+
+        # old temporary password no longer works; the new one does
+        old_login = self.client.post(LOGIN_URL, {'email': 'invited@example.com', 'password': temporary_password})
+        self.assertEqual(old_login.status_code, status.HTTP_401_UNAUTHORIZED)
+        new_login = self.client.post(LOGIN_URL, {'email': 'invited@example.com', 'password': 'BrandNewPass123!'})
+        self.assertEqual(new_login.status_code, status.HTTP_200_OK)
+        self.assertFalse(new_login.data['user']['must_change_password'])
+
+    def test_change_password_rejects_mismatched_confirmation(self):
+        self.authenticate_as('org@example.com', 'OrgPass123!')
+        response = self.client.post(CHANGE_PASSWORD_URL, {
+            'new_password': 'BrandNewPass123!',
+            'new_password_confirm': 'Different123!',
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_change_password_requires_authentication(self):
+        response = self.client.post(CHANGE_PASSWORD_URL, {
+            'new_password': 'BrandNewPass123!',
+            'new_password_confirm': 'BrandNewPass123!',
+        })
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_super_admin_can_activate_and_deactivate_organizer(self):
+        self.authenticate_as('admin@example.com', 'AdminPass123!')
+        response = self.client.patch(organizer_detail_url(self.organizer.pk), {
+            'is_active': False,
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.organizer.refresh_from_db()
+        self.assertFalse(self.organizer.is_active)
 
     def test_super_admin_can_list_organizers(self):
         self.authenticate_as('admin@example.com', 'AdminPass123!')
@@ -205,3 +263,73 @@ class OrganizerPermissionTests(APITestCase):
         })
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(User.objects.get(email='escalate@example.com').role, Role.USER)
+
+
+class UserManagementTests(APITestCase):
+    def setUp(self):
+        self.super_admin = User.objects.create_superuser(
+            email='admin@example.com', name='Admin', password='AdminPass123!'
+        )
+        self.organizer = User.objects.create_user(
+            email='org@example.com', name='Organizer One', password='OrgPass123!', role=Role.ORGANIZER
+        )
+        self.alice = User.objects.create_user(
+            email='alice@example.com', name='Alice Anderson', password='UserPass123!'
+        )
+        self.bob = User.objects.create_user(
+            email='bob@example.com', name='Bob Baker', password='UserPass123!', is_active=False
+        )
+
+    def authenticate_as(self, email, password):
+        login = self.client.post(LOGIN_URL, {'email': email, 'password': password})
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login.data["access"]}')
+
+    def test_super_admin_can_list_users(self):
+        self.authenticate_as('admin@example.com', 'AdminPass123!')
+        response = self.client.get(USERS_URL)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        emails = [row['email'] for row in response.data]
+        self.assertIn('alice@example.com', emails)
+        self.assertIn('bob@example.com', emails)
+        # organizers/super admins never show up in the Users list
+        self.assertNotIn('org@example.com', emails)
+        self.assertNotIn('admin@example.com', emails)
+
+    def test_search_filters_by_name_or_email(self):
+        self.authenticate_as('admin@example.com', 'AdminPass123!')
+        response = self.client.get(USERS_URL, {'search': 'alice'})
+        emails = [row['email'] for row in response.data]
+        self.assertEqual(emails, ['alice@example.com'])
+
+    def test_is_active_filter(self):
+        self.authenticate_as('admin@example.com', 'AdminPass123!')
+        response = self.client.get(USERS_URL, {'is_active': 'false'})
+        emails = [row['email'] for row in response.data]
+        self.assertEqual(emails, ['bob@example.com'])
+
+    def test_super_admin_can_view_user_detail(self):
+        self.authenticate_as('admin@example.com', 'AdminPass123!')
+        response = self.client.get(user_detail_url(self.alice.pk))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['email'], 'alice@example.com')
+
+    def test_super_admin_can_deactivate_user(self):
+        self.authenticate_as('admin@example.com', 'AdminPass123!')
+        response = self.client.patch(user_detail_url(self.alice.pk), {'is_active': False})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.alice.refresh_from_db()
+        self.assertFalse(self.alice.is_active)
+
+    def test_user_cannot_access_admin_users_endpoint(self):
+        self.authenticate_as('alice@example.com', 'UserPass123!')
+        response = self.client.get(USERS_URL)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_organizer_cannot_access_admin_users_endpoint(self):
+        self.authenticate_as('org@example.com', 'OrgPass123!')
+        response = self.client.get(USERS_URL)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_cannot_access_admin_users_endpoint(self):
+        response = self.client.get(USERS_URL)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)

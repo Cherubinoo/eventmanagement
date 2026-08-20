@@ -45,9 +45,25 @@ export const authApi = {
   register: (payload) => request('/auth/register/', { method: 'POST', body: payload }),
   login: (payload) => request('/auth/login/', { method: 'POST', body: payload }),
   me: () => request('/auth/me/', { auth: true }),
+  changePassword: (payload) => request('/auth/change-password/', { method: 'POST', body: payload, auth: true }),
+}
+
+function withQuery(path, params = {}) {
+  const query = new URLSearchParams(
+    Object.entries(params).filter(([, value]) => value !== undefined && value !== '')
+  ).toString()
+  return query ? `${path}?${query}` : path
 }
 
 export const adminApi = {
   listOrganizers: () => request('/admin/organizers/', { auth: true }),
   createOrganizer: (payload) => request('/admin/organizers/', { method: 'POST', body: payload, auth: true }),
+  updateOrganizer: (id, payload) =>
+    request(`/admin/organizers/${id}/`, { method: 'PATCH', body: payload, auth: true }),
+  deleteOrganizer: (id) => request(`/admin/organizers/${id}/`, { method: 'DELETE', auth: true }),
+
+  listUsers: (params) => request(withQuery('/admin/users/', params), { auth: true }),
+  getUser: (id) => request(`/admin/users/${id}/`, { auth: true }),
+  updateUserStatus: (id, isActive) =>
+    request(`/admin/users/${id}/`, { method: 'PATCH', body: { is_active: isActive }, auth: true }),
 }

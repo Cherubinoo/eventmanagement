@@ -10,6 +10,11 @@ export function saveSession({ access, refresh, user }) {
   setSession({ access, refresh, user })
 }
 
+export function updateSessionUser(user) {
+  const session = getSession()
+  if (session) setSession({ ...session, user })
+}
+
 export function getCurrentUser() {
   return getSession()?.user || null
 }
